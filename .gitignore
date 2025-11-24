@@ -1,0 +1,8 @@
+# Python cache
+__pycache__/
+
+# SQLite DB
+*.db
+
+# VSCode settings（任意）
+.vscode/
