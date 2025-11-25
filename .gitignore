@@ -1,8 +1,12 @@
-# Python cache
+# Python
 __pycache__/
+*.pyc
+
+# Virtual environment
+venv/
 
 # SQLite DB
 *.db
 
-# VSCode settings（任意）
+# IDE
 .vscode/
