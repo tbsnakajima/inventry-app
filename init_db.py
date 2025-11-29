@@ -1,37 +1,93 @@
 import sqlite3
 from werkzeug.security import generate_password_hash
 
-conn = sqlite3.connect("stock.db")
+# DB 作成・接続
+conn = sqlite3.connect("inventory.db")
 cur = conn.cursor()
 
-# --- stockテーブル（最新版） ---
+# 外部キー有効化
+cur.execute("PRAGMA foreign_keys = ON;")
+
+# ---------------------------
+# テーブル作成
+# ---------------------------
+
+# 1. 品目マスタ
 cur.execute("""
-CREATE TABLE IF NOT EXISTS stock (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    item TEXT NOT NULL,
-    name TEXT,
-    qty INTEGER NOT NULL,
-    reorder_point INTEGER DEFAULT 0,
-    min_qty INTEGER DEFAULT 0
+CREATE TABLE IF NOT EXISTS ITEMS (
+    item_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_name TEXT NOT NULL,
+    category TEXT,
+    unit TEXT,
+    reorder_point INTEGER,
+    standard_price REAL
 )
 """)
 
-# --- historyテーブル ---
+# 2. 仕入先マスタ
 cur.execute("""
-CREATE TABLE IF NOT EXISTS history (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    time TEXT,
-    item TEXT,
-    qty INTEGER,
-    action TEXT
+CREATE TABLE IF NOT EXISTS SUPPLIERS (
+    supplier_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    supplier_name TEXT NOT NULL,
+    contact TEXT,
+    email TEXT,
+    address TEXT
 )
 """)
 
-# 初期データ
-cur.execute("INSERT INTO stock (item, name, qty, reorder_point, min_qty) VALUES ('A001','コーヒー',10,5,1)")
-cur.execute("INSERT INTO stock (item, name, qty, reorder_point, min_qty) VALUES ('B002','紅茶',3,5,1)")
+# 3. 在庫テーブル
+cur.execute("""
+CREATE TABLE IF NOT EXISTS INVENTORY (
+    inventory_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id INTEGER NOT NULL,
+    quantity INTEGER NOT NULL,
+    last_update DATETIME DEFAULT CURRENT_TIMESTAMP,
+    expiration_date DATE,
+    FOREIGN KEY (item_id) REFERENCES ITEMS(item_id)
+)
+""")
 
-# users テーブル作成
+# 4. 入庫履歴
+cur.execute("""
+CREATE TABLE IF NOT EXISTS STOCKIN (
+    stockin_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id INTEGER NOT NULL,
+    supplier_id INTEGER NOT NULL,
+    quantity INTEGER NOT NULL,
+    date DATETIME DEFAULT CURRENT_TIMESTAMP,
+    expiration_date DATE,
+    FOREIGN KEY (item_id) REFERENCES ITEMS(item_id),
+    FOREIGN KEY (supplier_id) REFERENCES SUPPLIERS(supplier_id)
+)
+""")
+
+# 5. 出庫履歴
+cur.execute("""
+CREATE TABLE IF NOT EXISTS STOCKOUT (
+    stockout_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id INTEGER NOT NULL,
+    quantity INTEGER NOT NULL,
+    date DATETIME DEFAULT CURRENT_TIMESTAMP,
+    usage TEXT,
+    FOREIGN KEY (item_id) REFERENCES ITEMS(item_id)
+)
+""")
+
+# 6. 発注履歴
+cur.execute("""
+CREATE TABLE IF NOT EXISTS ORDERS (
+    order_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id INTEGER NOT NULL,
+    supplier_id INTEGER NOT NULL,
+    quantity INTEGER NOT NULL,
+    order_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+    status TEXT,
+    FOREIGN KEY (item_id) REFERENCES ITEMS(item_id),
+    FOREIGN KEY (supplier_id) REFERENCES SUPPLIERS(supplier_id)
+)
+""")
+
+# 7. ユーザー管理テーブル
 cur.execute("""
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -41,13 +97,23 @@ CREATE TABLE IF NOT EXISTS users (
 )
 """)
 
-# 初期ユーザー作成（例：オーナー）
+# ---------------------------
+# 初期ユーザー作成
+# ---------------------------
 cur.execute("""
 INSERT OR IGNORE INTO users (username, password, role)
 VALUES (?, ?, ?)
 """, ("owner", generate_password_hash("ownerpass"), "owner"))
 
+cur.execute("""
+INSERT OR IGNORE INTO users (username, password, role)
+VALUES (?, ?, ?)
+""", ("staff", generate_password_hash("staffpass"), "staff"))
+
+# ---------------------------
+# 保存・終了
+# ---------------------------
 conn.commit()
 conn.close()
 
-print("users テーブル作成と初期ユーザー作成完了")
+print("inventory.db 作成完了、全テーブルと初期ユーザーも追加されました")
