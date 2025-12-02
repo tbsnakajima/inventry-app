@@ -9,7 +9,7 @@ app.secret_key = "secret_key_here"  # セッション用
 
 # DB接続
 def get_db():
-    conn = sqlite3.connect("inventory.db")
+    conn = sqlite3.connect("inventory.db",timeout=5)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -52,15 +52,63 @@ def logout():
 def index():
     return render_template("index.html")
 
-# --- 在庫取得 ---
+# --- 品目追加 ---
+@app.route("/item/add", methods=["POST"])
+@role_required("owner", "manager")
+def add_item():
+    data = request.json
+    item_name = data.get("item_name")
+    category = data.get("category", "")
+    unit = data.get("unit", "")
+    reorder_point = data.get("reorder_point", 0)
+    standard_price = data.get("standard_price", 0.0)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    try:
+        # --- 重複チェック ---
+        cur.execute("SELECT item_id FROM items WHERE item_name = ?", (item_name,))
+        if cur.fetchone():
+            return jsonify({"status": "error", "message": "同じ商品名が既に存在します"}), 400
+
+        # --- items に追加 ---
+        cur.execute("""
+            INSERT INTO items (item_name, category, unit, reorder_point, standard_price)
+            VALUES (?, ?, ?, ?, ?)
+        """, (item_name, category, unit, reorder_point, standard_price))
+
+        # --- 追加した item_id を取得 ---
+        item_id = cur.lastrowid
+
+        # --- inventory に初期在庫作成 ---
+        cur.execute("""
+            INSERT INTO inventory (item_id, quantity)
+            VALUES (?, ?)
+        """, (item_id, 0))
+
+        conn.commit()
+        return jsonify({"status": "ok", "item_id": item_id})
+
+    except sqlite3.IntegrityError as e:
+        # DB 側の UNIQUE 制約に違反した場合の保険
+        return jsonify({"status": "error", "message": "同じ商品名が既に存在します"}), 400
+
+    finally:
+        conn.close()
+
+
+# --- 在庫取得（発注フラグ含む） ---
 @app.route("/stock", methods=["GET"])
 def get_stock():
     conn = get_db()
     cur = conn.cursor()
-    # inventory と items を結合して unit と reorder_point 取得
+    
+    # inventory と items を結合して必要な情報を取得
     cur.execute("""
         SELECT inv.inventory_id,
                it.item_name,
+               it.category,
                it.unit,
                inv.quantity,
                it.reorder_point,
@@ -68,7 +116,11 @@ def get_stock():
         FROM inventory AS inv
         JOIN items AS it ON inv.item_id = it.item_id
     """)
+    
     rows = cur.fetchall()
+    conn.close()  # 忘れずに閉じる
+    
+    # JSON に変換して返す
     return jsonify([dict(row) for row in rows])
 
 # --- 入庫処理 ---

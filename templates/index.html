@@ -5,12 +5,47 @@
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
 </head>
 <body>
+
+    <h3>新しい商品を追加</h3>
+<form id="add-item-form">
+    <input type="text" name="item_name" placeholder="商品名" required>
+    <input type="text" name="category" placeholder="カテゴリー">
+    <input type="text" name="unit" placeholder="単位">
+    <input type="number" name="reorder_point" placeholder="発注点" min="0">
+    <input type="number" name="standard_price" placeholder="標準単価" step="0.01">
+    <button type="submit">追加</button>
+</form>
+
+<script>
+document.getElementById('add-item-form').addEventListener('submit', function(e){
+    e.preventDefault();
+    const form = e.target;
+    const data = {
+        item_name: form.item_name.value,
+        category: form.category.value,
+        unit: form.unit.value,
+        reorder_point: parseInt(form.reorder_point.value) || 0,
+        standard_price: parseFloat(form.standard_price.value) || 0
+    };
+    axios.post('/item/add', data)
+        .then(res => {
+            if(res.data.status === "ok"){
+                alert("商品追加成功");
+                form.reset();
+                loadStock();  // 在庫一覧更新
+            }
+        });
+});
+</script>
+
+
 <h1>在庫管理</h1>
 
 <table border="1">
     <thead>
         <tr>
             <th>品目</th>
+            <th>カテゴリー</th>
             <th>数量</th>
             <th>単位</th>
             <th>発注フラグ</th>
@@ -33,6 +68,7 @@ function loadStock() {
             tbody.innerHTML += `
                 <tr>
                     <td>${row.item_name}</td>
+                    <td>${row.category}</td>
                     <td>${row.quantity}</td>
                     <td>${row.unit}</td>
                     <td>${row.reorder_flag ? "⚠ 発注" : ""}</td>
