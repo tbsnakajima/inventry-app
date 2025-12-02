@@ -1,33 +1,75 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <meta charset="utf-8">
-    <title>在庫確認</title>
-    <script>
-        async function loadStock() {
-            const res = await fetch("/stock");
-            const data = await res.json();
-            const table = document.getElementById("stock_table");
-            table.innerHTML = "<tr><th>品目ID</th><th>品目名</th><th>カテゴリー</th><th>単位</th><th>在庫数</th><th>発注フラグ</th></tr>";
-            data.forEach(row => {
-                const tr = document.createElement("tr");
-                tr.innerHTML = `<td>${row.item_id}</td>
-                                <td>${row.item_name}</td>
-                                <td>${row.category}</td>
-                                <td>${row.unit}</td>
-                                <td>${row.quantity}</td>
-                                <td>${row.reorder_flag ? "⚠" : ""}</td>`;
-                table.appendChild(tr);
-            });
-        }
-
-        window.onload = loadStock;
-    </script>
+    <title>在庫管理</title>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
 </head>
 <body>
-    <h2>在庫確認</h2>
-    <table border="1" id="stock_table"></table>
-    <br>
-    <a href="/logout">ログアウト</a>
-</body>
-</html>
+<h1>在庫管理</h1>
+
+<table border="1">
+    <thead>
+        <tr>
+            <th>品目</th>
+            <th>数量</th>
+            <th>単位</th>
+            <th>発注フラグ</th>
+            <th>入庫</th>
+            <th>出庫</th>
+        </tr>
+    </thead>
+    <tbody id="stock-table">
+        <!-- JSで埋め込み -->
+    </tbody>
+</table>
+
+<script>
+function loadStock() {
+    axios.get('/stock')
+    .then(res => {
+        const tbody = document.getElementById('stock-table');
+        tbody.innerHTML = '';
+        res.data.forEach(row => {
+            tbody.innerHTML += `
+                <tr>
+                    <td>${row.item_name}</td>
+                    <td>${row.quantity}</td>
+                    <td>${row.unit}</td>
+                    <td>${row.reorder_flag ? "⚠ 発注" : ""}</td>
+                    <td><button onclick="stockIn(${row.inventory_id})">入庫</button></td>
+                    <td><button onclick="stockOut(${row.inventory_id})">出庫</button></td>
+                </tr>
+            `;
+        });
+    });
+}
+
+
+function stockIn(inventory_id) {
+    const qty = parseInt(prompt("入庫数量を入力してください", "1"));
+    if (!qty) return;
+
+    axios.post('/stock/in', { inventory_id: inventory_id, qty: qty })
+    .then(res => {
+        alert("入庫完了");
+        loadStock();
+    })
+    .catch(err => alert(err));
+}
+
+function stockOut(inventory_id) {
+    const qty = parseInt(prompt("出庫数量を入力してください", "1"));
+    if (!qty) return;
+
+    axios.post('/stock/out', { inventory_id: inventory_id, qty: qty })
+    .then(res => {
+        alert("出庫完了");
+        loadStock();
+    })
+    .catch(err => alert(err));
+}
+
+// 初回ロード
+loadStock();
+</script>
+
