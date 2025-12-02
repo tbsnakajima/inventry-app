@@ -1,19 +1,19 @@
 from flask import Flask, request, jsonify, session, redirect, url_for, render_template
 from functools import wraps
 import sqlite3
+from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
-from flask import request, session, redirect, url_for, abort
-from werkzeug.security import check_password_hash
 
 app = Flask(__name__)
 app.secret_key = "secret_key_here"  # セッション用
 
+# DB接続
 def get_db():
-    conn = sqlite3.connect("stock.db")
+    conn = sqlite3.connect("inventory.db")
     conn.row_factory = sqlite3.Row
     return conn
 
-# --- 権限デコレーター ---
+# 権限デコレーター
 def role_required(*roles):
     def wrapper(f):
         @wraps(f)
@@ -36,19 +36,12 @@ def login():
         cur = conn.cursor()
         cur.execute("SELECT * FROM users WHERE username = ?", (username,))
         user = cur.fetchone()
-        if user and check_password_hash(user[2], password):
-            session["user"] = user[1]
-            session["role"] = user[3]
+        if user and check_password_hash(user["password"], password):
+            session["user"] = user["username"]
+            session["role"] = user["role"]
             return redirect(url_for("index"))
-        else:
-            return "ユーザー名またはパスワードが間違っています"
-    return """
-    <form method="post">
-        ユーザー名: <input name="username"><br>
-        パスワード: <input type="password" name="password"><br>
-        <input type="submit" value="ログイン">
-    </form>
-    """
+        return "ユーザー名またはパスワードが間違っています"
+    return render_template("login.html")
 
 @app.route("/logout")
 def logout():
@@ -58,54 +51,78 @@ def logout():
 @app.route("/")
 def index():
     return render_template("index.html")
-# --- 在庫取得（発注フラグ含む） ---
+
+# --- 在庫取得 ---
 @app.route("/stock", methods=["GET"])
 def get_stock():
     conn = get_db()
     cur = conn.cursor()
-    # reorder_point が存在する前提 発注フラグ
     cur.execute("""
-        SELECT *,
-               CASE WHEN qty <= reorder_point THEN 1 ELSE 0 END AS reorder_flag
-        FROM stock
+        SELECT i.item_id, i.item_name, i.category, i.unit, i.reorder_point, i.standard_price,
+               IFNULL(inv.quantity,0) AS quantity,
+               inv.expiration_date,
+               CASE WHEN IFNULL(inv.quantity,0) <= i.reorder_point THEN 1 ELSE 0 END AS reorder_flag
+        FROM items i
+        LEFT JOIN inventory inv ON i.item_id = inv.item_id
+        ORDER BY i.item_id
     """)
     rows = cur.fetchall()
     return jsonify([dict(row) for row in rows])
 
-# --- 入庫処理 ---
+# --- 入庫 ---
 @app.route("/stock/in", methods=["POST"])
 @role_required("owner", "manager")
 def stock_in():
     data = request.json
-    item = data["item"]
+    item_id = data["item_id"]
     qty = data["qty"]
+    supplier_id = data.get("supplier_id")
+    expiration_date = data.get("expiration_date")
+
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("UPDATE stock SET qty = qty + ? WHERE item = ?", (qty, item))
-    cur.execute(
-        "INSERT INTO history (time, item, qty, action) VALUES (datetime('now'), ?, ?, ?)",
-        (item, qty, "IN")
-    )
+    cur.execute("SELECT * FROM inventory WHERE item_id = ?", (item_id,))
+    inv = cur.fetchone()
+    if inv:
+        cur.execute(
+            "UPDATE inventory SET quantity = quantity + ?, last_update = CURRENT_TIMESTAMP WHERE item_id = ?",
+            (qty, item_id)
+        )
+    else:
+        cur.execute(
+            "INSERT INTO inventory (item_id, quantity, expiration_date) VALUES (?, ?, ?)",
+            (item_id, qty, expiration_date)
+        )
+
+    # 入庫履歴
+    if supplier_id:
+        cur.execute(
+            "INSERT INTO stockin (item_id, supplier_id, quantity, expiration_date) VALUES (?, ?, ?, ?)",
+            (item_id, supplier_id, qty, expiration_date)
+        )
+
     conn.commit()
     return jsonify({"status": "ok"})
 
-# --- 出庫処理 ---
+# --- 出庫 ---
 @app.route("/stock/out", methods=["POST"])
+@role_required("owner", "manager")
 def stock_out():
     data = request.json
-    item = data["item"]
+    item_id = data["item_id"]
     qty = data["qty"]
 
     conn = get_db()
     cur = conn.cursor()
-
-    # 在庫更新（出庫なのでマイナス）
-    cur.execute("UPDATE stock SET qty = qty - ? WHERE item = ?", (qty, item))
-
-    # 履歴追加
     cur.execute(
-        "INSERT INTO history (time, item, qty, action) VALUES (?, ?, ?, ?)",
-        (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), item, qty, "OUT")
+        "UPDATE inventory SET quantity = quantity - ?, last_update = CURRENT_TIMESTAMP WHERE item_id = ?",
+        (qty, item_id)
+    )
+
+    # 出庫履歴
+    cur.execute(
+        "INSERT INTO stockout (item_id, quantity) VALUES (?, ?)",
+        (item_id, qty)
     )
 
     conn.commit()
@@ -116,7 +133,14 @@ def stock_out():
 def get_history():
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("SELECT * FROM history ORDER BY time DESC")
+    cur.execute("""
+        SELECT stockin_id AS id, item_id, quantity, date AS time, 'IN' AS action
+        FROM stockin
+        UNION ALL
+        SELECT stockout_id AS id, item_id, quantity, date AS time, 'OUT' AS action
+        FROM stockout
+        ORDER BY time DESC
+    """)
     rows = cur.fetchall()
     return jsonify([dict(row) for row in rows])
 
