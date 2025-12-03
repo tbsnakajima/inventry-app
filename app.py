@@ -3,6 +3,14 @@ from functools import wraps
 import sqlite3
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
+import os
+
+DB_PATH = os.path.join(os.path.dirname(__file__), "inventory.db")
+
+def get_db():
+    conn = sqlite3.connect(DB_PATH, timeout=5)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 app = Flask(__name__)
 app.secret_key = "secret_key_here"  # セッション用
@@ -25,6 +33,12 @@ def role_required(*roles):
             return f(*args, **kwargs)
         return decorated
     return wrapper
+
+@app.route("/dbcheck")
+def dbcheck():
+    import os
+    return jsonify({"DB_PATH": DB_PATH, "exists": os.path.exists(DB_PATH)})
+
 
 # --- ログイン ---
 @app.route("/login", methods=["GET", "POST"])
@@ -57,71 +71,134 @@ def index():
 @role_required("owner", "manager")
 def add_item():
     data = request.json
+    print("POST data:", data)
+    
     item_name = data.get("item_name")
     category = data.get("category", "")
     unit = data.get("unit", "")
-    reorder_point = data.get("reorder_point", 0)
-    standard_price = data.get("standard_price", 0.0)
+    reorder_point = int(data.get("reorder_point", 0))
+    standard_price = float(data.get("standard_price", 0.0))
 
     conn = get_db()
     cur = conn.cursor()
 
     try:
-        # --- 重複チェック ---
+        # 重複チェック
         cur.execute("SELECT item_id FROM items WHERE item_name = ?", (item_name,))
         if cur.fetchone():
+            print("重複商品名:", item_name)
             return jsonify({"status": "error", "message": "同じ商品名が既に存在します"}), 400
 
-        # --- items に追加 ---
+        # items に追加
         cur.execute("""
             INSERT INTO items (item_name, category, unit, reorder_point, standard_price)
             VALUES (?, ?, ?, ?, ?)
         """, (item_name, category, unit, reorder_point, standard_price))
-
-        # --- 追加した item_id を取得 ---
         item_id = cur.lastrowid
+        print("追加 item_id:", item_id)
 
-        # --- inventory に初期在庫作成 ---
+        # inventory に初期在庫作成
         cur.execute("""
             INSERT INTO inventory (item_id, quantity)
             VALUES (?, ?)
         """, (item_id, 0))
 
         conn.commit()
+        print("DB commit 成功")
         return jsonify({"status": "ok", "item_id": item_id})
 
-    except sqlite3.IntegrityError as e:
-        # DB 側の UNIQUE 制約に違反した場合の保険
-        return jsonify({"status": "error", "message": "同じ商品名が既に存在します"}), 400
+    except Exception as e:
+        print("例外発生:", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
 
     finally:
         conn.close()
 
 
-# --- 在庫取得（発注フラグ含む） ---
+# --- 予約作成 ---
+@app.route("/reservation/create", methods=["POST"])
+@role_required("owner", "manager")
+def create_reservation():
+    data = request.json
+    inventory_id = data["inventory_id"]
+    qty = data["qty"]
+    usage = data.get("usage", "")
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # 在庫情報取得
+    cur.execute("SELECT item_id, quantity, allocated FROM inventory WHERE inventory_id = ?", (inventory_id,))
+    inv = cur.fetchone()
+    if not inv:
+        conn.close()
+        return jsonify({"status": "error", "message": "在庫が存在しません"}), 404
+
+    available = inv["quantity"] - (inv["allocated"] or 0)
+    if qty > available:
+        conn.close()
+        return jsonify({"status": "error", "message": f"可用在庫不足（{available}）"}), 400
+
+    # reservation に追加
+    cur.execute("""
+        INSERT INTO reservations (item_id, quantity, usage)
+        VALUES (?, ?, ?)
+    """, (inv["item_id"], qty, usage))
+
+    # inventory の allocated を更新
+    cur.execute("""
+        UPDATE inventory
+        SET allocated = COALESCE(allocated,0) + ?
+        WHERE inventory_id = ?
+    """, (qty, inventory_id))
+
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "ok"})
+
+
+# --- 在庫取得（入荷待ち・予約割当・可用在庫を含む） ---
 @app.route("/stock", methods=["GET"])
 def get_stock():
     conn = get_db()
     cur = conn.cursor()
-    
-    # inventory と items を結合して必要な情報を取得
+
     cur.execute("""
-        SELECT inv.inventory_id,
-               it.item_name,
-               it.category,
-               it.unit,
-               inv.quantity,
-               it.reorder_point,
-               CASE WHEN inv.quantity <= it.reorder_point THEN 1 ELSE 0 END AS reorder_flag
+        SELECT 
+            inv.inventory_id,
+            it.item_name,
+            it.category,
+            it.unit,
+            inv.quantity,
+            COALESCE(inv.allocated,0) AS allocated,
+            COALESCE(inv.ordered,0) AS ordered,
+            (inv.quantity - COALESCE(inv.allocated,0)) AS available,
+            CASE WHEN inv.quantity <= it.reorder_point THEN 1 ELSE 0 END AS reorder_flag
         FROM inventory AS inv
         JOIN items AS it ON inv.item_id = it.item_id
     """)
     
     rows = cur.fetchall()
-    conn.close()  # 忘れずに閉じる
-    
-    # JSON に変換して返す
+    conn.close()
     return jsonify([dict(row) for row in rows])
+
+
+    # JSON に変換して返す
+    result = []
+    for row in rows:
+        result.append({
+            "inventory_id": row["inventory_id"],
+            "item_name": row["item_name"],
+            "category": row["category"],
+            "unit": row["unit"],
+            "quantity": row["quantity"],
+            "allocated": row["allocated"],
+            "ordered": row["ordered"],
+            "available": row["available"],
+            "reorder_flag": row["reorder_flag"]
+        })
+
+    return jsonify(result)
 
 # --- 入庫処理 ---
 @app.route("/stock/in", methods=["POST"])
@@ -134,19 +211,54 @@ def stock_in():
     conn = get_db()
     cur = conn.cursor()
 
-    # 在庫更新（入庫なのでプラス）
+    # 在庫取得
+    cur.execute("SELECT item_id, quantity, ordered, allocated FROM inventory WHERE inventory_id = ?", (inventory_id,))
+    inv = cur.fetchone()
+    if not inv:
+        conn.close()
+        return jsonify({"status": "error", "message": "在庫が見つかりません"}), 404
+
+    item_id = inv["item_id"]
+    new_qty = inv["quantity"] + qty
+    new_ordered = max(inv["ordered"] - qty, 0)
+
+    # --- inventory 更新 ---
     cur.execute("UPDATE inventory SET quantity = quantity + ? WHERE inventory_id = ?", (qty, inventory_id))
 
-    # 入庫履歴追加
+
+    # --- stockin 履歴 ---
     cur.execute("""
         INSERT INTO stockin (item_id, supplier_id, quantity, date)
-        SELECT item_id, 1, ?, datetime('now')  -- supplier_id は仮に 1
-        FROM inventory
-        WHERE inventory_id = ?
-    """, (qty, inventory_id))
+        VALUES (?, 1, ?, datetime('now'))
+    """, (item_id, qty))
+
+    # --- 予約割当の自動割当 ---
+    cur.execute("""
+        SELECT reservation_id, quantity, status
+        FROM reservations
+        WHERE item_id = ? AND status = 'reserved'
+        ORDER BY reserved_date
+    """, (item_id,))
+    reservations = cur.fetchall()
+    remaining = qty
+
+    for r in reservations:
+        if remaining <= 0:
+            break
+        allocate_qty = min(remaining, r["quantity"])
+        # allocated 更新
+        cur.execute("UPDATE inventory SET allocated = allocated + ? WHERE inventory_id = ?", (allocate_qty, inventory_id))
+        # 予約数量更新（消化済みに変更する場合は status を 'consumed' に）
+        cur.execute("""
+            UPDATE reservations
+            SET quantity = quantity - ?, status = CASE WHEN quantity - ? <= 0 THEN 'consumed' ELSE 'reserved' END
+            WHERE reservation_id = ?
+        """, (allocate_qty, allocate_qty, r["reservation_id"]))
+        remaining -= allocate_qty
 
     conn.commit()
-    return jsonify({"status": "ok"})
+    conn.close()
+    return jsonify({"status": "ok", "ordered_remaining": new_ordered})
 
 
 # --- 出庫処理 ---
@@ -160,19 +272,33 @@ def stock_out():
     conn = get_db()
     cur = conn.cursor()
 
-    # 在庫更新（出庫なのでマイナス）
+    # 在庫取得
+    cur.execute("SELECT quantity, allocated, item_id FROM inventory WHERE inventory_id = ?", (inventory_id,))
+    inv = cur.fetchone()
+    if not inv:
+        return jsonify({"status": "error", "message": "在庫が見つかりません"}), 404
+
+    available_qty = inv["quantity"] - inv["allocated"]
+    if qty > available_qty:
+        return jsonify({"status": "error", "message": f"出庫可能在庫不足 ({available_qty} 利用可能)"}), 400
+
+    # allocated があれば減らす
+    new_allocated = max(inv["allocated"] - qty, 0)
+
+    # quantity 更新（総在庫は減らす）
     cur.execute("UPDATE inventory SET quantity = quantity - ? WHERE inventory_id = ?", (qty, inventory_id))
+
 
     # 出庫履歴追加
     cur.execute("""
         INSERT INTO stockout (item_id, quantity, date, usage)
-        SELECT item_id, ?, datetime('now'), '消費'
-        FROM inventory
-        WHERE inventory_id = ?
-    """, (qty, inventory_id))
+        VALUES (?, ?, datetime('now'), '消費')
+    """, (inv["item_id"], qty))
 
     conn.commit()
-    return jsonify({"status": "ok"})
+    conn.close()
+    return jsonify({"status": "ok", "allocated_remaining": new_allocated})
+
 
 
 if __name__ == "__main__":

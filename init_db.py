@@ -35,15 +35,17 @@ CREATE TABLE IF NOT EXISTS suppliers (
 )
 """)
 
-# 3. 在庫テーブル
+# 3. 在庫テーブル（修正版）
 cur.execute("""
 CREATE TABLE IF NOT EXISTS inventory (
     inventory_id INTEGER PRIMARY KEY AUTOINCREMENT,
     item_id INTEGER NOT NULL,
     quantity INTEGER NOT NULL,
+    ordered INTEGER DEFAULT 0,
+    allocated INTEGER DEFAULT 0,
     last_update DATETIME DEFAULT CURRENT_TIMESTAMP,
     expiration_date DATE,
-    FOREIGN KEY (item_id) REFERENCES ITEMS(item_id)
+    FOREIGN KEY (item_id) REFERENCES items(item_id)
 )
 """)
 
@@ -56,8 +58,8 @@ CREATE TABLE IF NOT EXISTS stockin (
     quantity INTEGER NOT NULL,
     date DATETIME DEFAULT CURRENT_TIMESTAMP,
     expiration_date DATE,
-    FOREIGN KEY (item_id) REFERENCES ITEMS(item_id),
-    FOREIGN KEY (supplier_id) REFERENCES SUPPLIERS(supplier_id)
+    FOREIGN KEY (item_id) REFERENCES items(item_id),
+    FOREIGN KEY (supplier_id) REFERENCES suppliers(supplier_id)
 )
 """)
 
@@ -69,7 +71,7 @@ CREATE TABLE IF NOT EXISTS stockout (
     quantity INTEGER NOT NULL,
     date DATETIME DEFAULT CURRENT_TIMESTAMP,
     usage TEXT,
-    FOREIGN KEY (item_id) REFERENCES ITEMS(item_id)
+    FOREIGN KEY (item_id) REFERENCES items(item_id)
 )
 """)
 
@@ -82,18 +84,32 @@ CREATE TABLE IF NOT EXISTS orders (
     quantity INTEGER NOT NULL,
     order_date DATETIME DEFAULT CURRENT_TIMESTAMP,
     status TEXT,
-    FOREIGN KEY (item_id) REFERENCES ITEMS(item_id),
-    FOREIGN KEY (supplier_id) REFERENCES SUPPLIERS(supplier_id)
+    FOREIGN KEY (item_id) REFERENCES items(item_id),
+    FOREIGN KEY (supplier_id) REFERENCES suppliers(supplier_id)
 )
 """)
 
-# 7. ユーザー管理テーブル
+# 7. ユーザー管理
 cur.execute("""
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE NOT NULL,
     password TEXT NOT NULL,
     role TEXT NOT NULL
+)
+""")
+
+# 8. 出庫予約テーブル（コメント削除済）
+cur.execute("""
+CREATE TABLE IF NOT EXISTS reservations (
+    reservation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id INTEGER NOT NULL,
+    quantity INTEGER NOT NULL,
+    reserved_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+    expected_use_date DATE,
+    usage TEXT,
+    status TEXT DEFAULT 'reserved',
+    FOREIGN KEY (item_id) REFERENCES items(item_id)
 )
 """)
 

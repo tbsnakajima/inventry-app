@@ -46,7 +46,10 @@ document.getElementById('add-item-form').addEventListener('submit', function(e){
         <tr>
             <th>品目</th>
             <th>カテゴリー</th>
-            <th>数量</th>
+            <th>総在庫</th>
+            <th>予約割当</th>
+            <th>入荷待ち</th>
+            <th>可用在庫</th>
             <th>単位</th>
             <th>発注フラグ</th>
             <th>入庫</th>
@@ -54,58 +57,84 @@ document.getElementById('add-item-form').addEventListener('submit', function(e){
         </tr>
     </thead>
     <tbody id="stock-table">
-        <!-- JSで埋め込み -->
+        <!-- データは JS で動的に追加 -->
     </tbody>
 </table>
 
+
 <script>
-function loadStock() {
-    axios.get('/stock')
-    .then(res => {
-        const tbody = document.getElementById('stock-table');
-        tbody.innerHTML = '';
-        res.data.forEach(row => {
-            tbody.innerHTML += `
-                <tr>
-                    <td>${row.item_name}</td>
-                    <td>${row.category}</td>
-                    <td>${row.quantity}</td>
-                    <td>${row.unit}</td>
-                    <td>${row.reorder_flag ? "⚠ 発注" : ""}</td>
-                    <td><button onclick="stockIn(${row.inventory_id})">入庫</button></td>
-                    <td><button onclick="stockOut(${row.inventory_id})">出庫</button></td>
-                </tr>
-            `;
-        });
+async function loadStock() {
+    const res = await fetch("/stock");
+    const stock = await res.json();
+    const tbody = document.getElementById("stock-table");
+    tbody.innerHTML = ""; // 既存行をクリア
+
+    stock.forEach(inv => {
+        const tr = document.createElement("tr");
+
+        // 発注フラグや予約割当・入荷待ちで色分け
+        if (inv.reorder_flag) tr.style.backgroundColor = "#ffcccc";  // 赤
+        else if (inv.allocated > 0) tr.style.backgroundColor = "#fff0b3"; // 黄
+        else if (inv.ordered > 0) tr.style.backgroundColor = "#cce5ff"; // 青
+
+        tr.innerHTML = `
+            <td>${inv.item_name}</td>
+            <td>${inv.category}</td>
+            <td>${inv.quantity}</td>
+            <td>${inv.allocated}</td>
+            <td>${inv.ordered}</td>
+            <td>${inv.available}</td>
+            <td>${inv.unit}</td>
+            <td>${inv.reorder_flag ? "⚠️" : ""}</td>
+            <td><button onclick="stockIn(${inv.inventory_id})">入庫</button></td>
+            <td><button onclick="stockOut(${inv.inventory_id})">出庫</button></td>
+            <td><button onclick="createReservation(${inv.inventory_id})">予約作成</button></td>
+
+        `;
+        tbody.appendChild(tr);
     });
 }
 
-
-function stockIn(inventory_id) {
-    const qty = parseInt(prompt("入庫数量を入力してください", "1"));
+async function stockIn(inventory_id) {
+    const qty = prompt("入庫数量を入力:");
     if (!qty) return;
-
-    axios.post('/stock/in', { inventory_id: inventory_id, qty: qty })
-    .then(res => {
-        alert("入庫完了");
-        loadStock();
-    })
-    .catch(err => alert(err));
+    await fetch("/stock/in", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({inventory_id, qty: parseInt(qty)})
+    });
+    loadStock();
 }
 
-function stockOut(inventory_id) {
-    const qty = parseInt(prompt("出庫数量を入力してください", "1"));
+async function stockOut(inventory_id) {
+    const qty = prompt("出庫数量を入力:");
     if (!qty) return;
-
-    axios.post('/stock/out', { inventory_id: inventory_id, qty: qty })
-    .then(res => {
-        alert("出庫完了");
+    await fetch("/stock/out", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({inventory_id, qty: parseInt(qty)})
+    });
+    loadStock();
+}
+async function createReservation(inventory_id) {
+    const qty = prompt("予約数量を入力:");
+    if (!qty) return;
+    const usage = prompt("用途や顧客名を入力（任意）:", "");
+    const res = await fetch("/reservation/create", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({inventory_id, qty: parseInt(qty), usage})
+    });
+    const data = await res.json();
+    if (data.status === "ok") {
+        alert("予約作成成功");
         loadStock();
-    })
-    .catch(err => alert(err));
+    } else {
+        alert("エラー: " + data.message);
+    }
 }
 
-// 初回ロード
-loadStock();
+
+// ページ読み込み時に在庫をロード
+window.onload = loadStock;
 </script>
-
