@@ -6,6 +6,16 @@
 </head>
 <body>
 
+        <h1>在庫管理システム</h1>
+
+    <p>こんにちは、{{ session['user'] }} さん</p>
+
+    <p>
+        <a href="{{ url_for('logout') }}">ログアウト</a>
+    </p>
+
+
+
     <h3>新しい商品を追加</h3>
 <form id="add-item-form">
     <input type="text" name="item_name" placeholder="商品名" required>
